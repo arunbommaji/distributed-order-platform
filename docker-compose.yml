@@ -24,7 +24,6 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
       KAFKA_NUM_PARTITIONS: 3
-      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
     networks: [platform]
 
   kafka-ui:
@@ -95,7 +94,6 @@ services:
     container_name: redis
     ports:
       - "6379:6379"
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     networks: [platform]
 
   order-service:
@@ -157,6 +155,15 @@ services:
       SPRING_DATASOURCE_USERNAME: notificationuser
       SPRING_DATASOURCE_PASSWORD: notificationpass
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    networks: [platform]
+    restart: on-failure
+
+  ui-dashboard:
+    build: ./ui-dashboard
+    container_name: ui-dashboard
+    depends_on: [order-service]
+    ports:
+      - "3000:80"
     networks: [platform]
     restart: on-failure
 
