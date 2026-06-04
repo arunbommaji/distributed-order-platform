@@ -1,0 +1,146 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/order-platform
+
+jobs:
+  # ── Build & Test ─────────────────────────────────────────────────────────────
+  test:
+    name: Build and Test — ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [order-service, payment-service, inventory-service, notification-service]
+    defaults:
+      run:
+        working-directory: ${{ matrix.service }}
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: testdb
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 10s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Run tests
+        run: mvn test -q
+        env:
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/testdb
+          SPRING_DATASOURCE_USERNAME: testuser
+          SPRING_DATASOURCE_PASSWORD: testpass
+          SPRING_DATA_REDIS_HOST: localhost
+          SPRING_KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+
+      - name: Build JAR
+        run: mvn package -DskipTests -q
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.service }}-jar
+          path: ${{ matrix.service }}/target/*.jar
+          retention-days: 1
+
+  # ── Docker Build & Push ───────────────────────────────────────────────────────
+  docker:
+    name: Docker — ${{ matrix.service }}
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      matrix:
+        service: [order-service, payment-service, inventory-service, notification-service]
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.service }}-jar
+          path: ${{ matrix.service }}/target/
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # ── Deploy to Kubernetes ──────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to K8s
+    needs: docker
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Configure kubeconfig
+        run: echo "${{ secrets.KUBECONFIG }}" | base64 -d > /tmp/kubeconfig
+
+      - name: Apply K8s manifests
+        run: kubectl apply -f k8s/ --recursive
+        env:
+          KUBECONFIG: /tmp/kubeconfig
+
+      - name: Zero-downtime rolling deploy
+        run: |
+          for svc in order-service payment-service inventory-service notification-service; do
+            IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${svc}:$(git rev-parse --short HEAD)"
+            kubectl set image deployment/${svc} ${svc}=${IMAGE} -n order-platform --kubeconfig=/tmp/kubeconfig
+            kubectl rollout status deployment/${svc} -n order-platform --timeout=120s --kubeconfig=/tmp/kubeconfig
+            echo "✅ ${svc} rolled out"
+          done
+
+      - name: Verify all pods running
+        run: kubectl get pods -n order-platform --kubeconfig=/tmp/kubeconfig
