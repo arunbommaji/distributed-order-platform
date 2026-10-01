@@ -1,0 +1,44 @@
+{
+  "run_id": "20260930T223220Z",
+  "environment": {
+    "platform": "macOS-26.3.1-arm64-arm-64bit",
+    "python": "3.9.6",
+    "cpu_count": 10
+  },
+  "config": {
+    "url": "http://localhost:8081",
+    "orders": 500,
+    "concurrency": 4,
+    "product_id": "PROD-006",
+    "quantity": 1,
+    "unit_price": 9.99,
+    "poll_timeout": 30.0,
+    "poll_interval": 0.15,
+    "poll_concurrency": 32,
+    "no_poll": false,
+    "output_dir": "benchmarks/results"
+  },
+  "http": {
+    "attempted": 500,
+    "accepted_201": 500,
+    "failed": 0,
+    "elapsed_s": 0.7712,
+    "accepted_orders_per_s": 648.322,
+    "p50_ms": 5.267,
+    "p95_ms": 9.947,
+    "p99_ms": 13.253,
+    "mean_ms": 5.884
+  },
+  "saga": {
+    "polled": 500,
+    "terminal_count": 500,
+    "terminal_completion_rate_pct": 100.0,
+    "statuses": {
+      "CANCELLED": 475,
+      "CONFIRMED": 25
+    },
+    "poll_elapsed_s": 16.519,
+    "terminal_orders_per_s": 28.918
+  },
+  "errors_sample": []
+}
